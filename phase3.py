@@ -1,5 +1,5 @@
 from bsddb3 import db
-import xml.etree.ElementTree
+from datetime import datetime, timedelta
 
 symbols = [':', '<', '>', '>=', '<=', '=']
 keyDict = {
@@ -12,34 +12,14 @@ keyDict = {
     'date' : 'da.idx',
 }
 
-briefOutput = "brief"
-fullOutput = "full"
-
-def getOutput(rowID, outputType):
-	global briefOutput
-	global fullOutput
-	record = ""
-	database = recsDatabase()
-	curs = database.cursor()
-	iter = curs.set(rowID.encode("utf-8"))
-	if iter != None:
-		record = iter[1].decode("utf-8")
-	if outputType == briefOutput:
-		mail = xml.etree.ElementTree.fromstring(record)
-		return mail.find('subj').text
-	elif outputType == fullOutput:
-		return record
+dateformat = '%Y/%m/%d'
 
 def termsDatabase(): 
     database = db.DB()
     #database.set_flags(db.DB_DUP)
     DB_File = 'te.idx'
     database.open(DB_File, None, db.DB_BTREE)
-    #curs = database.cursor()
-    #iter = curs.first()
-    #while iter:
-    #        print(iter)
-    #        iter = curs.next()
+    
     return database
     
     
@@ -76,9 +56,10 @@ def equality(key, values):
             curs = database.cursor()
             if key == 'subj':
                 iter = curs.set(b's-'+i.encode("utf-8"))
+                #print("{0:b}".format(b's-'+i.encode("utf-8")))
             elif key == 'body':
                 iter = curs.set(b'b-'+i.encode("utf-8"))
-           
+
         elif x == 'em.idx':
             database = emailsDatabase()
             curs = database.cursor()
@@ -99,10 +80,10 @@ def equality(key, values):
         #print(result)
         #iter = curs.first()
         if iter!=None:
-            results.append((iter[0].decode("utf-8"), iter[1].decode("utf-8")))
+            results.append(iter[1].decode("utf-8"))
             for i in range(curs.count()-1):
                 iter = curs.next_dup()
-                results.append((iter[0].decode("utf-8"), iter[1].decode("utf-8")))
+                results.append(iter[1].decode("utf-8"))
                 
         #print(results)
         #return results
@@ -125,14 +106,81 @@ def equality(key, values):
         #results.append(i)
     
     return results
-    
-#def range():
+   
+def rangeQ(key, value, operator):
+    results = []
+    x = keyDict.get(key)
+    if x == 'da.idx':
+        database = datesDatabase()
+        curs = database.cursor()
+        if operator == '>':
+            newObject = datetime.strptime(value, dateformat) + timedelta(days=1)
+            value = newObject.strftime(dateformat)
+            iter = curs.set_range(value.encode("utf-8"))
+            while (iter != None):
+                results.append(iter[1].decode("utf-8"))
+                iter = curs.next()
+                
+            #print(results)
+            return results
+            
+        elif operator == '>=':
+            iter = curs.set_range(value.encode("utf-8"))
+            
+            while (iter != None):
+                results.append(iter[1].decode("utf-8"))
+                iter = curs.next()
+                
+            #print(results)
+            return results
+        elif operator == '<':
+            iter = curs.set_range(value.encode("utf-8"))
+            iter = curs.first()
+            while(iter !=None):
+                if(str(iter[0].decode("utf-8"))>=value): 
+                    break
+                results.append(iter[1].decode("utf-8"))
+                iter = curs.next()
+            #print(results)
+            return results
+        elif operator == '<=':
+            iter = curs.first()
+            while(iter !=None):
+                if(str(iter[0].decode("utf-8"))>value): 
+                    break
+                results.append(iter[1].decode("utf-8"))
+                iter = curs.next()
+            #print(results)
+            return results
+        
 
+def doBoth(key):
+    results = []
+    database = termsDatabase()
+    curs = database.cursor()
+    iter = curs.set(b's-'+key.encode("utf-8"))
+    if iter!=None:
+            results.append(iter[1].decode("utf-8"))
+            for i in range(curs.count()-1):
+                iter = curs.next_dup()
+                results.append(iter[1].decode("utf-8"))
+
+    iter = curs.set(b'b-'+key.encode("utf-8"))
+    if iter!=None:
+            results.append(iter[1].decode("utf-8"))
+            for i in range(curs.count()-1):
+                iter = curs.next_dup()
+                results.append(iter[1].decode("utf-8"))
+
+    curs.close()
+    database.close()
+    return results
 
 
 def lookup(query):
     results = []
     k = True
+    querytype = ''
     key = ''
     value = ''
     values = []
@@ -140,11 +188,17 @@ def lookup(query):
     for char in query:
         if char in symbols:
             k = False
-            if char == ':' or char == '=':
+            if char == ':':
                 querytype = 'equality'
-            elif char == '>' or char == '<' or char == '>=' or char == '<=':
+            elif char == '>' or char == '<':
                 querytype = 'range'
-                operators.append(char) 
+                operators.append(char)
+            elif char == '=' and operators:
+                querytype = 'range'
+                operators[0] = operators[0] + char
+            elif char == '=' and not(operators):
+                querytype = 'equality'
+
         elif k:
             key = key + char.lower()
         elif not(k):
@@ -154,14 +208,18 @@ def lookup(query):
             else:
                 value = value + char.lower()
     values.append(value)
-    print(values)
+    #print(values)
     #print(operators)
+    #print(querytype)
     if querytype == 'equality':
         #equality(key, values)
          results = equality(key, values)
     elif querytype == 'range':
-        querytype = ''
-    
+        results = rangeQ(key, values[0], operators[0])
+    elif querytype == '':
+        results = doBoth(key)
+
+
     return results
     
     
@@ -200,8 +258,8 @@ def getQueries():
             elif ('%' == query[i][-1]):
                 formatted.append(query[i])
             elif (':' not in query[i] and '>' not in query[i] and '<' not in query[i] and '<=' not in query[i] and '>=' not in query[i] and '=' not in query[i]):
-                formatted[-1] = '-'.join([formatted[-1], query[i]])
-            
+                #formatted[-1] = '-'.join([formatted[-1], query[i]])
+                formatted.append(query[i])
         print(formatted)
 
         #for i in formatted:
@@ -210,8 +268,8 @@ def getQueries():
         for i in formatted:
             results.append(lookup(i))
         
-        #for i in results:
-        #    print(str(i)+'\n')    
+        for i in results:
+            print(str(i)+'\n')    
         
         op = set.intersection(*map(set,results))
 
